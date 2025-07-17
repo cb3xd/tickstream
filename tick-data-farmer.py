@@ -1,11 +1,13 @@
 import websockets, asyncio, json, argparse
+from datetime import datetime
+import pandas as pd
+import keyboard
+URL = "wss://wbs.mexc.com/ws"
 
 
-async def main(symbol: str, interval: str):
-    url = "wss://wbs.mexc.com/ws"
-
-    async with websockets.connect(url) as websocket:
-        print(f"[+] Connected to WebSocket at {url}")
+async def kline_stream(symbol: str, interval: str):
+    async with websockets.connect(URL) as websocket:
+        print(f"[+] Connected to WebSocket at {URL}")
 
         # Construct and send subscription message
         message = {
@@ -17,11 +19,10 @@ async def main(symbol: str, interval: str):
         await websocket.send(json.dumps(message))
         print(f"[+] Subscribed to {symbol} @ {interval}")
 
-        # Receive and print raw messages
         try:
             while True:
                 msg = await websocket.recv()
-                print(json.dumps(json.loads(msg), indent=2))  # Pretty-print JSON
+                print(json.dumps(json.loads(msg), indent=2)) 
         except websockets.exceptions.ConnectionClosed:
             print("[-] WebSocket connection closed.")
         except Exception as e:
