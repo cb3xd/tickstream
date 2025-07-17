@@ -97,10 +97,4 @@ async def main():
     
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Minimal WebSocket data stream client.")
-    parser.add_argument("symbol", type=str, help="Trading pair (e.g., BTCUSDT)")
-    parser.add_argument("--interval", type=str, default="Min1", help="Kline interval")
-
-    args = parser.parse_args()
-
-    asyncio.run(main(args.symbol.upper(), args.interval))
+    asyncio.run(main())
