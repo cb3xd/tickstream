@@ -1,100 +1,98 @@
-import websockets, asyncio, json, argparse
-from datetime import datetime
+import asyncio
+import json
+import websockets
 import pandas as pd
-import keyboard
-URL = "wss://wbs.mexc.com/ws"
+from datetime import datetime
+import sys
 
-
-async def kline_stream(symbol: str, interval: str):
-    async with websockets.connect(URL) as websocket:
-        print(f"[+] Connected to WebSocket at {URL}")
-
-        # Construct and send subscription message
-        message = {
-            "method": "SUBSCRIPTION",
-            "params": [
-                f"spot@public.kline.v3.api@{symbol}@{interval}"
-            ]
-        }
-        await websocket.send(json.dumps(message))
-        print(f"[+] Subscribed to {symbol} @ {interval}")
-
-        try:
-            while True:
-                msg = await websocket.recv()
-                print(json.dumps(json.loads(msg), indent=2)) 
-        except websockets.exceptions.ConnectionClosed:
-            print("[-] WebSocket connection closed.")
-        except Exception as e:
-            print(f"[!] Error: {e}")
-
+WS_URL = "wss://stream.binance.com:9443/ws" 
+SYMBOL = "btcusdt"
 
 async def trade_stream(symbol: str):
-    df = pd.DataFrame(columns=['Time', 'Price', 'Volume', 'CVD'])
-    cvd = 0.0  # initialize CVD accumulator
-
-    async with websockets.connect(URL) as websocket:
-        print(f"[+] Connected to WebSocket at {URL}")
-
-        # Subscribe to trade stream
-        message = {
-            "method": "SUBSCRIPTION",
-            "params": [
-                f"spot@public.deals.v3.api@{symbol}",
-            ]
-        }
-        await websocket.send(json.dumps(message))
-        print(f"[+] Subscribed to {symbol} Trade Stream")
-
-        try:
-            while True:
-                if keyboard.is_pressed('esc'):
-                    print('\n[!] Saving file, exiting...')
-                    break
-                msg = await websocket.recv()
-                data = json.loads(msg)
-
-                trades = data.get('d', {}).get('deals', [])
-                pair = data.get('s', '')
-
-                for trade in trades:
-                    price = float(trade.get('p'))
-                    volume = float(trade.get('v'))
-                    direction = trade.get('S')  # 1 = buy, 2 = sell
-                    timestamp = trade.get('t')
-
-
-                    if direction == 1:
-                        cvd += volume
-                        direction_string = 'BUY'
-                    elif direction == 2:
-                        cvd -= volume
-                        direction_string = 'SELL'
-
-                    time_string = datetime.fromtimestamp(timestamp / 1000).strftime('%H:%M:%S')
-
-                    print(f'{time_string} {pair} {price} {direction_string} {volume:.4f} | CVD: {cvd:.2f}')
-
-                    # Add row to DataFrame
-                    df.loc[len(df)] = [timestamp, price, volume, cvd]
-        except asyncio.TimeoutError:
-            pass
-        except KeyboardInterrupt:
-            print("[x] Interrupted")
-            print(df.tail())
-        except websockets.exceptions.ConnectionClosed:
-            print("[-] WebSocket connection closed.")
-        except Exception as e:
-            print(f"[!] Error: {e}")
-        finally:
-            last_row_time = df['Time'].iloc[-1]
-            df.to_csv(f'td_{pair}_{last_row_time}.csv', index=False)
+    symbol = symbol.lower()
+    stream_name = f"{symbol}@aggTrade"
     
+    trade_data = []
+    cvd = 0.0
+    
+    print(f"[INFO] Attempting to connect to: {WS_URL}")
+    print(f"[INFO] Stream: {stream_name}")
+    print("[INFO] Press Ctrl+C to stop and save data.")
 
+
+    try:
+        async with websockets.connect(WS_URL, open_timeout=30, ping_interval=None) as websocket:
+            print("[SUCCESS] Connected!")
+
+            subscribe_msg = {
+                "method": "SUBSCRIBE",
+                "params": [stream_name],
+                "id": 1
+            }
+            await websocket.send(json.dumps(subscribe_msg))
+            
+            while True:
+                try:
+                    # Wait for message
+                    msg = await websocket.recv()
+                    data = json.loads(msg)
+
+                    if 'e' not in data or data['e'] != 'aggTrade':
+                        continue
+
+                    # 3. PARSE DATA
+                    price = float(data['p'])
+                    quantity = float(data['q'])
+                    timestamp = data['T']
+                    is_buyer_maker = data['m']
+
+                    if is_buyer_maker:
+                        direction_string = 'SELL'
+                        cvd -= quantity
+                    else:
+                        direction_string = 'BUY'
+                        cvd += quantity
+
+                    readable_time = datetime.fromtimestamp(timestamp / 1000).strftime('%H:%M:%S.%f')[:-3]
+                    
+                    print(f"{readable_time} | {symbol.upper()} | {price:.2f} | {direction_string} | Vol: {quantity:.4f} | CVD: {cvd:.4f}")
+
+                    trade_data.append({
+                        'Time': timestamp,
+                        'HumanTime': readable_time,
+                        'Price': price,
+                        'Volume': quantity,
+                        'Direction': direction_string,
+                        'CVD': cvd
+                    })
+
+                except asyncio.TimeoutError:
+                    print("[WARN] No data received for a while...")
+                    continue
+
+    except asyncio.TimeoutError:
+        print("\n[ERROR] Connection Timed Out. \nPossible causes:\n1. You are in a restricted region (USA) -> Use a VPN or change URL to binance.us\n2. Firewall/ISP blocking Port 9443.")
+    except websockets.exceptions.ConnectionClosed as e:
+        print(f"\n[ERROR] Connection Closed: {e}")
+    except KeyboardInterrupt:
+        print("\n[INFO] User stopped stream.")
+    except Exception as e:
+        print(f"\n[ERROR] Unexpected error: {e}")
+    finally:
+        # 4. SAVE DATA
+        if trade_data:
+            filename = f"trades_{symbol}_{int(datetime.now().timestamp())}.csv"
+            print(f"[INFO] Saving {len(trade_data)} trades to {filename}...")
+            pd.DataFrame(trade_data).to_csv(filename, index=False)
+            print("[SUCCESS] File saved.")
+        else:
+            print("[INFO] No data collected to save.")
 
 async def main():
-    await trade_stream('BTCUSDT')
-    
+    await trade_stream(SYMBOL)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
